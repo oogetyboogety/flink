@@ -18,6 +18,7 @@
 
 package org.apache.flink.table.planner.plan.nodes.exec.serde;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.api.config.TableConfigOptions.CatalogPlanCompilation;
@@ -30,14 +31,19 @@ import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ser.std.S
 
 import java.io.IOException;
 
-/** JSON serializer for {@link ContextResolvedTable}. */
-class ContextResolvedTableJsonSerializer extends StdSerializer<ContextResolvedTable> {
+/**
+ * JSON serializer for {@link ContextResolvedTable}.
+ *
+ * @see ContextResolvedTableJsonDeserializer for the reverse operation
+ */
+@Internal
+final class ContextResolvedTableJsonSerializer extends StdSerializer<ContextResolvedTable> {
     private static final long serialVersionUID = 1L;
 
-    public static final String FIELD_NAME_IDENTIFIER = "identifier";
-    public static final String FIELD_NAME_CATALOG_TABLE = "resolvedTable";
+    static final String FIELD_NAME_IDENTIFIER = "identifier";
+    static final String FIELD_NAME_CATALOG_TABLE = "resolvedTable";
 
-    public ContextResolvedTableJsonSerializer() {
+    ContextResolvedTableJsonSerializer() {
         super(ContextResolvedTable.class);
     }
 
@@ -68,11 +74,19 @@ class ContextResolvedTableJsonSerializer extends StdSerializer<ContextResolvedTa
         if ((contextResolvedTable.isPermanent() || contextResolvedTable.isAnonymous())
                 && planCompilationOption != CatalogPlanCompilation.IDENTIFIER) {
             jsonGenerator.writeFieldName(FIELD_NAME_CATALOG_TABLE);
-            ResolvedCatalogTableJsonSerializer.serialize(
-                    contextResolvedTable.getResolvedTable(),
-                    planCompilationOption == CatalogPlanCompilation.ALL,
-                    jsonGenerator,
-                    serializerProvider);
+            try {
+                ResolvedCatalogTableJsonSerializer.serialize(
+                        contextResolvedTable.getResolvedTable(),
+                        planCompilationOption == CatalogPlanCompilation.ALL,
+                        jsonGenerator,
+                        serializerProvider);
+            } catch (ValidationException e) {
+                throw new ValidationException(
+                        String.format(
+                                "Error when trying to serialize table '%s'.",
+                                contextResolvedTable.getIdentifier()),
+                        e);
+            }
         }
 
         jsonGenerator.writeEndObject();

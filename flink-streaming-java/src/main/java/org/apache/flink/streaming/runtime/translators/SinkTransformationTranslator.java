@@ -27,7 +27,6 @@ import org.apache.flink.api.connector.sink2.TwoPhaseCommittingSink;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.streaming.api.connector.sink2.CommittableMessage;
 import org.apache.flink.streaming.api.connector.sink2.CommittableMessageTypeInfo;
-import org.apache.flink.streaming.api.connector.sink2.StandardSinkTopologies;
 import org.apache.flink.streaming.api.connector.sink2.WithPostCommitTopology;
 import org.apache.flink.streaming.api.connector.sink2.WithPreCommitTopology;
 import org.apache.flink.streaming.api.connector.sink2.WithPreWriteTopology;
@@ -65,19 +64,24 @@ public class SinkTransformationTranslator<Input, Output>
     @Override
     public Collection<Integer> translateForBatch(
             SinkTransformation<Input, Output> transformation, Context context) {
-        return translateForStreaming(transformation, context);
+        return translateInternal(transformation, context, true);
     }
 
     @Override
     public Collection<Integer> translateForStreaming(
             SinkTransformation<Input, Output> transformation, Context context) {
+        return translateInternal(transformation, context, false);
+    }
 
+    private Collection<Integer> translateInternal(
+            SinkTransformation<Input, Output> transformation, Context context, boolean batch) {
         SinkExpander<Input> expander =
                 new SinkExpander<>(
                         transformation.getInputStream(),
                         transformation.getSink(),
                         transformation,
-                        context);
+                        context,
+                        batch);
         expander.expand();
         return Collections.emptyList();
     }
@@ -95,18 +99,24 @@ public class SinkTransformationTranslator<Input, Output>
         private final DataStream<T> inputStream;
         private final StreamExecutionEnvironment executionEnvironment;
         private final int environmentParallelism;
+        private final boolean isBatchMode;
+        private final boolean isCheckpointingEnabled;
 
         public SinkExpander(
                 DataStream<T> inputStream,
                 Sink<T> sink,
                 SinkTransformation<T, ?> transformation,
-                Context context) {
+                Context context,
+                boolean isBatchMode) {
             this.inputStream = inputStream;
             this.executionEnvironment = inputStream.getExecutionEnvironment();
             this.environmentParallelism = executionEnvironment.getParallelism();
+            this.isCheckpointingEnabled =
+                    executionEnvironment.getCheckpointConfig().isCheckpointingEnabled();
             this.transformation = transformation;
             this.sink = sink;
             this.context = context;
+            this.isBatchMode = isBatchMode;
         }
 
         private void expand() {
@@ -130,7 +140,8 @@ public class SinkTransformationTranslator<Input, Output>
                                 input.transform(
                                         WRITER_NAME,
                                         CommittableMessageTypeInfo.noOutput(),
-                                        new SinkWriterOperatorFactory<>(sink)));
+                                        new SinkWriterOperatorFactory<>(
+                                                sink, isBatchMode, isCheckpointingEnabled)));
             }
 
             final List<Transformation<?>> sinkTransformations =
@@ -161,7 +172,8 @@ public class SinkTransformationTranslator<Input, Output>
                                     input.transform(
                                             WRITER_NAME,
                                             typeInformation,
-                                            new SinkWriterOperatorFactory<>(sink)));
+                                            new SinkWriterOperatorFactory<>(
+                                                    sink, isBatchMode, isCheckpointingEnabled)));
 
             DataStream<CommittableMessage<CommT>> precommitted = addFailOverRegion(written);
 
@@ -179,7 +191,9 @@ public class SinkTransformationTranslator<Input, Output>
                                     pc.transform(
                                             COMMITTER_NAME,
                                             typeInformation,
-                                            new CommitterOperatorFactory<>(committingSink)));
+                                            new CommitterOperatorFactory<>(
+                                                    committingSink,
+                                                    isBatchMode || isCheckpointingEnabled)));
 
             if (sink instanceof WithPostCommitTopology) {
                 DataStream<CommittableMessage<CommT>> postcommitted = addFailOverRegion(committed);
@@ -233,16 +247,6 @@ public class SinkTransformationTranslator<Input, Output>
                     transformations.subList(numTransformsBefore, transformations.size());
 
             for (Transformation<?> subTransformation : expandedTransformations) {
-                // Skip overwriting the parallelism for the global committer
-                if (subTransformation.getName() == null
-                        || !subTransformation
-                                .getName()
-                                .equals(
-                                        StandardSinkTopologies
-                                                .GLOBAL_COMMITTER_TRANSFORMATION_NAME)) {
-                    subTransformation.setParallelism(transformation.getParallelism());
-                }
-
                 concatUid(
                         subTransformation,
                         Transformation::getUid,

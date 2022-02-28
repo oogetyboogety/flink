@@ -741,6 +741,7 @@ class PyFlinkStreamUserDefinedFunctionTests(UserDefinedFunctionTests,
         actual = source_sink_utils.results()
         self.assert_equals(actual, ["+I[1970-01-01T00:00:00.123Z]"])
 
+    @unittest.skip("Python UDFs are currently unsupported in JSON plan")
     def test_execute_from_json_plan(self):
         # create source file path
         tmp_dir = self.tempdir
@@ -803,7 +804,7 @@ class PyFlinkEmbeddedMultiThreadTests(UserDefinedFunctionTests, PyFlinkBatchTabl
                                                                "multi-thread")
 
 
-@pytest.mark.skipif(sys.version_info < (3, 7), reason="requires python3.7")
+@pytest.mark.skipif(sys.version_info < (3, 8), reason="requires python3.8")
 class PyFlinkEmbeddedSubInterpreterTests(UserDefinedFunctionTests, PyFlinkBatchTableTestCase):
     def setUp(self):
         super(PyFlinkEmbeddedSubInterpreterTests, self).setUp()

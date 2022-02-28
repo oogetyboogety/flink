@@ -72,7 +72,10 @@ public class ForwardHashExchangeTest extends TableTestBase {
     }
 
     @Test
-    public void testOverAgg() {
+    public void testOverAggOnHashAggWithHashShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "SortAgg");
         util.verifyExecPlan(
                 " SELECT\n"
                         + "   SUM(b) sum_b,\n"
@@ -84,11 +87,41 @@ public class ForwardHashExchangeTest extends TableTestBase {
     }
 
     @Test
-    public void testHashAgg() {
+    public void testOverAggOnHashAggWithGlobalShuffle() {
         util.tableEnv()
                 .getConfig()
-                .getConfiguration()
-                .setString(
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "SortAgg");
+        util.verifyExecPlan("SELECT b, RANK() OVER (ORDER BY b) FROM (SELECT SUM(b) AS b FROM T)");
+    }
+
+    @Test
+    public void testOverAggOnSortAggWithHashShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "HashAgg");
+        util.verifyExecPlan(
+                " SELECT\n"
+                        + "   SUM(b) sum_b,\n"
+                        + "   AVG(SUM(b)) OVER (PARTITION BY c) avg_b,\n"
+                        + "   RANK() OVER (PARTITION BY c ORDER BY c) rn,\n"
+                        + "   c\n"
+                        + " FROM T\n"
+                        + " GROUP BY c");
+    }
+
+    @Test
+    public void testOverAggOnSortAggWithGlobalShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "HashAgg");
+        util.verifyExecPlan("SELECT b, RANK() OVER (ORDER BY b) FROM (SELECT SUM(b) AS b FROM T)");
+    }
+
+    @Test
+    public void testHashAggOnHashJoinWithHashShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(
                         ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS,
                         "SortMergeJoin,NestedLoopJoin,SortAgg");
         util.verifyExecPlan(
@@ -97,11 +130,10 @@ public class ForwardHashExchangeTest extends TableTestBase {
     }
 
     @Test
-    public void testSortAgg() {
+    public void testSortAggOnSortMergeJoinWithHashShuffle() {
         util.tableEnv()
                 .getConfig()
-                .getConfiguration()
-                .setString(
+                .set(
                         ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS,
                         "HashJoin,NestedLoopJoin,HashAgg");
         util.verifyExecPlan(
@@ -110,11 +142,38 @@ public class ForwardHashExchangeTest extends TableTestBase {
     }
 
     @Test
-    public void testRank() {
+    public void testHashAggOnNestedLoopJoinWithGlobalShuffle() {
         util.tableEnv()
                 .getConfig()
-                .getConfiguration()
-                .setString(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "SortAgg");
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "SortAgg");
+        util.tableEnv()
+                .getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, "ONE_PHASE");
+        // TODO the shuffle between join and agg can be removed
+        util.verifyExecPlan(
+                "WITH r AS (SELECT * FROM T1 FULL OUTER JOIN T2 ON true)\n"
+                        + "SELECT sum(b1) FROM r");
+    }
+
+    @Test
+    public void testSortAggOnNestedLoopJoinWithGlobalShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "HashAgg");
+        util.tableEnv()
+                .getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, "ONE_PHASE");
+        // TODO the shuffle between join and agg can be removed
+        util.verifyExecPlan(
+                "WITH r AS (SELECT * FROM T1 FULL OUTER JOIN T2 ON true)\n"
+                        + "SELECT sum(b1) FROM r");
+    }
+
+    @Test
+    public void testRankOnHashAggWithHashShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "SortAgg");
         util.verifyExecPlan(
                 "SELECT * FROM (\n"
                         + "                SELECT a, b, RANK() OVER(PARTITION BY a ORDER BY b) rk FROM (\n"
@@ -124,17 +183,52 @@ public class ForwardHashExchangeTest extends TableTestBase {
     }
 
     @Test
+    public void testRankOnHashAggWithGlobalShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "SortAgg");
+        util.verifyExecPlan(
+                "SELECT * FROM (\n"
+                        + "                SELECT b, RANK() OVER(ORDER BY b) rk FROM (\n"
+                        + "                        SELECT SUM(b) AS b FROM T\n"
+                        + "                )\n"
+                        + "        ) WHERE rk <= 10");
+    }
+
+    @Test
+    public void testRankOnSortAggWithHashShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "SortAgg");
+        util.verifyExecPlan(
+                "SELECT * FROM (\n"
+                        + "                SELECT a, b, RANK() OVER(PARTITION BY a ORDER BY b) rk FROM (\n"
+                        + "                        SELECT a, SUM(b) AS b FROM T GROUP BY a\n"
+                        + "                )\n"
+                        + "        ) WHERE rk <= 10");
+    }
+
+    @Test
+    public void testRankOnSortAggWithGlobalShuffle() {
+        util.tableEnv()
+                .getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "SortAgg");
+        util.verifyExecPlan(
+                "SELECT * FROM (\n"
+                        + "                SELECT b, RANK() OVER(ORDER BY b) rk FROM (\n"
+                        + "                        SELECT SUM(b) AS b FROM T\n"
+                        + "                )\n"
+                        + "        ) WHERE rk <= 10");
+    }
+
+    @Test
     public void testHashJoinWithMultipleInputDisabled() {
         util.tableEnv()
                 .getConfig()
-                .getConfiguration()
-                .setString(
+                .set(
                         ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS,
-                        "SortMergeJoin,NestedLoopJoin");
-        util.tableEnv()
-                .getConfig()
-                .getConfiguration()
-                .setBoolean(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTIPLE_INPUT_ENABLED, false);
+                        "SortMergeJoin,NestedLoopJoin")
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTIPLE_INPUT_ENABLED, false);
         util.verifyExecPlan(
                 "SELECT * FROM\n"
                         + "  (SELECT a FROM T1 JOIN T ON a = a1) t1\n"
@@ -147,14 +241,10 @@ public class ForwardHashExchangeTest extends TableTestBase {
     public void testSortJoinWithMultipleInputDisabled() {
         util.tableEnv()
                 .getConfig()
-                .getConfiguration()
-                .setString(
+                .set(
                         ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS,
-                        "HashJoin,NestedLoopJoin");
-        util.tableEnv()
-                .getConfig()
-                .getConfiguration()
-                .setBoolean(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTIPLE_INPUT_ENABLED, false);
+                        "HashJoin,NestedLoopJoin")
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTIPLE_INPUT_ENABLED, false);
         util.verifyExecPlan(
                 "SELECT * FROM\n"
                         + "  (SELECT a FROM T1 JOIN T ON a = a1) t1\n"
@@ -167,12 +257,8 @@ public class ForwardHashExchangeTest extends TableTestBase {
     public void testMultipleInputs() {
         util.getTableEnv()
                 .getConfig()
-                .getConfiguration()
-                .setBoolean(OptimizerConfigOptions.TABLE_OPTIMIZER_JOIN_REORDER_ENABLED, false);
-        util.getTableEnv()
-                .getConfig()
-                .getConfiguration()
-                .setString(
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_JOIN_REORDER_ENABLED, false)
+                .set(
                         ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS,
                         "NestedLoopJoin,SortMergeJoin,SortAgg");
 
